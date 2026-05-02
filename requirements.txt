@@ -1,0 +1,5 @@
+tira>=0.0.159,<0.1
+sentencepiece>=0.2.0,<0.3
+torch>=2.7,<2.8
+transformers>=4.51,<4.52
+scikit-learn>=1.8,<1.9
