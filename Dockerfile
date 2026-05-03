@@ -4,8 +4,10 @@ ADD predict.py /predict.py
 ADD requirements.txt /requirements.txt
 ADD model /model
 
+# The base image already provides torch with CUDA support. Reinstalling torch
+# pulls a second full CUDA/cuDNN stack into the submission image and can make
+# Docker export fail locally due to disk exhaustion.
 RUN pip3 install --no-cache-dir -r /requirements.txt
-RUN pip3 uninstall -y torchvision
 
 ARG EMBEDDING_MODEL=sentence-transformers/all-mpnet-base-v2
 ARG QWEN_MODEL=Qwen/Qwen2.5-1.5B-Instruct
