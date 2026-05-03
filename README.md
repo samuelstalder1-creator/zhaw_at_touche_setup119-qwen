@@ -128,6 +128,54 @@ Useful overrides:
 
 ## Validate The Docker Submission
 
+Use this section before uploading to TIRA to validate that the Dockerized
+submission behaves like a real TIRA run.
+
+### Prerequisites
+
+- Docker is installed and running
+- `tira` is installed: `pip3 install tira`
+- you are registered for the task in TIRA
+- for real uploads, the git repository is clean: `git status`
+
+Authenticate and verify the local TIRA client:
+
+```bash
+tira-cli login --token <YOUR_TIRA_TOKEN>
+tira-cli verify-installation --task advertisement-in-retrieval-augmented-generation-2026
+```
+
+If you use Docker Desktop with the containerd image store enabled, TIRA may
+reject uploaded images even though the local build and push succeed. In that
+case, force Docker v2 manifest output during submission:
+
+```bash
+tira-cli code-submission \
+  --path . \
+  --task advertisement-in-retrieval-augmented-generation-2026 \
+  --dataset ads-in-rag-task-1-detection-spot-check-20260422-training \
+  --command '/predict.py' \
+  --build-args '--output type=docker --provenance=false'
+```
+
+If Docker still exports an incompatible image, disable Docker Desktop's
+`Use containerd for pulling and storing images` setting, rebuild, and retry the
+submission.
+
+If the failure happens before your submission image is built, `tira-cli` is
+likely rejecting its own internal `tira-mini` preflight image before the
+`--build-args` above are applied. In that case, prepend the repo-local Docker
+wrapper so every `docker build` invoked by `tira-cli` gets the compatibility
+flags, including the preflight check:
+
+```bash
+PATH="${PWD}/tools:${PATH}" tira-cli code-submission \
+  --path . \
+  --task advertisement-in-retrieval-augmented-generation-2026 \
+  --dataset ads-in-rag-task-1-detection-spot-check-20260422-training \
+  --command '/predict.py'
+```
+
 Build locally:
 
 ```bash
@@ -145,6 +193,14 @@ tira-cli code-submission \
   --command '/predict.py'
 ```
 
+What this validates:
+
+- the Docker image builds successfully
+- `/predict.py` starts correctly inside the container
+- the runtime can read `$inputDataset`
+- the runtime writes a valid JSONL prediction file to `$outputDir`
+- the output format is acceptable for the task
+
 The Docker build preloads both runtime transformer models:
 
 - `sentence-transformers/all-mpnet-base-v2`
@@ -154,6 +210,8 @@ That keeps the final TIRA execution offline-safe while still using the local
 `model/` classifier bundle.
 
 ## Submit To TIRA
+
+From this directory, submit the package with:
 
 ```bash
 tira-cli code-submission \

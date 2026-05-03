@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+resolve_real_docker() {
+  if [[ -n "${REAL_DOCKER_BIN:-}" ]]; then
+    printf '%s\n' "$REAL_DOCKER_BIN"
+    return 0
+  fi
+
+  local self_path candidate
+  self_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+
+  while IFS= read -r candidate; do
+    if [[ "$candidate" != "$self_path" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done < <(which -a docker 2>/dev/null)
+
+  printf 'Unable to resolve the real docker binary.\n' >&2
+  return 1
+}
+
+main() {
+  local real_docker
+  real_docker="$(resolve_real_docker)"
+
+  if [[ "${1:-}" == "build" ]]; then
+    shift
+
+    local has_output=0
+    local has_provenance=0
+    local arg
+
+    for arg in "$@"; do
+      case "$arg" in
+        --output|--output=*)
+          has_output=1
+          ;;
+        --provenance|--provenance=*)
+          has_provenance=1
+          ;;
+      esac
+    done
+
+    local -a args prefix extra
+    args=("$@")
+    prefix=("${args[@]}")
+    extra=()
+
+    if (( ! has_output )); then
+      extra+=(--output type=docker)
+    fi
+
+    if (( ! has_provenance )); then
+      extra+=(--provenance=false)
+    fi
+
+    if (( ${#extra[@]} > 0 && ${#args[@]} > 0 )); then
+      local last_index=$(( ${#args[@]} - 1 ))
+      local context="${args[$last_index]}"
+      prefix=("${args[@]:0:$last_index}")
+      exec "$real_docker" build "${prefix[@]}" "${extra[@]}" "$context"
+    fi
+
+    exec "$real_docker" build "${args[@]}"
+  fi
+
+  exec "$real_docker" "$@"
+}
+
+main "$@"

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import os
 import pickle
@@ -23,6 +24,8 @@ DEFAULT_QWEN_MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
 DEFAULT_THRESHOLD = 0.5
 DEFAULT_BATCH_SIZE = 32
 DEFAULT_MAX_LENGTH = 512
+DEFAULT_CPU_BATCH_SIZE = 1
+DEFAULT_CPU_MAX_LENGTH = 512
 DEFAULT_MAX_NEW_TOKENS = 220
 DEFAULT_TAG = "zhawAtToucheSetup119"
 DEFAULT_NEUTRAL_FIELD = "qwen"
@@ -769,6 +772,26 @@ def resolve_output_file(args: argparse.Namespace) -> Path:
     return Path(get_output_directory(str(Path(__file__).parent))) / "predictions.jsonl"
 
 
+def tune_runtime_settings(
+    *,
+    batch_size: int,
+    max_length: int,
+    device: str,
+    user_batch_size: int | None,
+    user_max_length: int | None,
+) -> tuple[int, int]:
+    if device == "cuda":
+        return batch_size, max_length
+
+    if user_batch_size is None:
+        batch_size = DEFAULT_CPU_BATCH_SIZE
+
+    if user_max_length is None:
+        max_length = min(max_length, DEFAULT_CPU_MAX_LENGTH)
+
+    return batch_size, max_length
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -861,6 +884,13 @@ def main() -> None:
 
     raw_records, input_description = load_records_from_source(input_source)
     device = resolve_device(args.device)
+    batch_size, max_length = tune_runtime_settings(
+        batch_size=batch_size,
+        max_length=max_length,
+        device=device,
+        user_batch_size=args.batch_size,
+        user_max_length=args.max_length,
+    )
 
     records = raw_records
     generated_queries = 0
@@ -881,6 +911,7 @@ def main() -> None:
         )
         del qwen_model
         del qwen_tokenizer
+        gc.collect()
         if device == "cuda":
             torch.cuda.empty_cache()
 
