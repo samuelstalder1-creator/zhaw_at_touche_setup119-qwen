@@ -8,7 +8,8 @@ At runtime the submission:
 
 - loads the bundled local sklearn pipeline from `model/`
 - reuses the input `qwen` field when present
-- otherwise generates the neutral locally with `Qwen/Qwen2.5-1.5B-Instruct`
+- otherwise requires a locally cached `Qwen/Qwen2.5-1.5B-Instruct` neutral generator
+- fails fast if a missing `qwen` value would require generation but the local Qwen weights are unavailable
 - embeds texts with `sentence-transformers/all-mpnet-base-v2`
 - applies the saved `setup119` residual feature layout
 - writes `predictions.jsonl` in the TIRA format
@@ -68,8 +69,15 @@ Optional:
 
 - `qwen`: precomputed neutral response
 
-If `qwen` is missing or empty, the runtime generates it locally with Qwen and
-caches one generated neutral per unique query during the run.
+If `qwen` is missing or empty, the runtime must generate a neutral response
+with the locally cached Qwen model. If those local weights are unavailable, the
+run terminates with an error. Generated neutrals are cached once per unique
+query during the run.
+
+Before scoring, `predict.py` logs the prediction inputs with
+`prediction_input_begin`, `prediction_input_fields=...`,
+`prediction_input=...`, and `prediction_input_end`. On large datasets, this can
+produce very large logs.
 
 ## Output Specification
 
@@ -206,8 +214,9 @@ The Docker build preloads both runtime transformer models:
 - `sentence-transformers/all-mpnet-base-v2`
 - `Qwen/Qwen2.5-1.5B-Instruct`
 
-That keeps the final TIRA execution offline-safe while still using the local
-`model/` classifier bundle.
+This keeps the final TIRA execution self-contained for both embedding inference
+and strict local Qwen neutral generation while still using the local `model/`
+classifier bundle.
 
 ## Submit To TIRA
 

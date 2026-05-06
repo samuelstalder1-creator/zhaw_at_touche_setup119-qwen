@@ -289,36 +289,22 @@ def load_embedding_model(model_name: str, device: str):
 
 
 def load_local_generation_model(model_name: str, device: str):
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
-        if tokenizer.pad_token_id is None and tokenizer.eos_token is not None:
-            tokenizer.pad_token = tokenizer.eos_token
+    tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
+    if tokenizer.pad_token_id is None and tokenizer.eos_token is not None:
+        tokenizer.pad_token = tokenizer.eos_token
 
-        model_kwargs: dict[str, Any] = {}
-        if device == "cuda":
-            if torch.cuda.is_bf16_supported():
-                model_kwargs["torch_dtype"] = torch.bfloat16
-            else:
-                model_kwargs["torch_dtype"] = torch.float16
+    model_kwargs: dict[str, Any] = {}
+    if device == "cuda":
+        if torch.cuda.is_bf16_supported():
+            model_kwargs["torch_dtype"] = torch.bfloat16
+        else:
+            model_kwargs["torch_dtype"] = torch.float16
 
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            local_files_only=True,
-            **model_kwargs,
-        ).to(device)
-    except OSError:
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        if tokenizer.pad_token_id is None and tokenizer.eos_token is not None:
-            tokenizer.pad_token = tokenizer.eos_token
-
-        model_kwargs = {}
-        if device == "cuda":
-            if torch.cuda.is_bf16_supported():
-                model_kwargs["torch_dtype"] = torch.bfloat16
-            else:
-                model_kwargs["torch_dtype"] = torch.float16
-
-        model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs).to(device)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        local_files_only=True,
+        **model_kwargs,
+    ).to(device)
 
     model.eval()
     return tokenizer, model
@@ -675,6 +661,36 @@ def build_feature_matrix(
     return feature_names, np.concatenate(feature_blocks, axis=1)
 
 
+def log_prediction_inputs(
+    *,
+    records: Sequence[Mapping[str, Any]],
+    state: Mapping[str, Any],
+) -> None:
+    trainer_type = str(state["trainer_type"])
+    response_field = str(state.get("response_field", "response"))
+    neutral_field = str(state.get("neutral_field", DEFAULT_NEUTRAL_FIELD))
+    aux_neutral_field = state.get("aux_neutral_field")
+    if aux_neutral_field is not None:
+        aux_neutral_field = str(aux_neutral_field)
+    query_field = str(state.get("query_field", "query"))
+
+    fields_to_log = [query_field, neutral_field, response_field]
+    if trainer_type in DUAL_FILE_TRAINERS and aux_neutral_field and aux_neutral_field not in fields_to_log:
+        fields_to_log.append(aux_neutral_field)
+
+    print("prediction_input_begin")
+    print(f"prediction_input_fields={','.join(['id', *fields_to_log])}")
+    for row_number, record in enumerate(records, start=1):
+        payload: dict[str, Any] = {
+            "row": row_number,
+            "id": record["id"],
+        }
+        for field in fields_to_log:
+            payload[field] = record.get(field)
+        print("prediction_input=" + json.dumps(payload, ensure_ascii=False))
+    print("prediction_input_end")
+
+
 def score_records(
     *,
     classifier,
@@ -834,7 +850,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--qwen-model",
         default=DEFAULT_QWEN_MODEL_NAME,
-        help="Local or remote Qwen instruction model used to generate missing neutrals.",
+        help="Locally cached Qwen instruction model used to generate missing neutrals.",
     )
     parser.add_argument("--tag", default=None, help="Prediction tag. Defaults to the saved setup name.")
     parser.add_argument("--batch-size", type=int, default=None, help="Embedding batch size override.")
@@ -899,7 +915,14 @@ def main() -> None:
         neutral_field=neutral_field,
         reuse_existing_neutral=args.reuse_existing_neutral,
     ):
-        qwen_tokenizer, qwen_model = load_local_generation_model(args.qwen_model, device)
+        try:
+            qwen_tokenizer, qwen_model = load_local_generation_model(args.qwen_model, device)
+        except OSError as exc:
+            raise RuntimeError(
+                "Neutral generation requires a local Qwen model, but the configured weights could not be "
+                f"loaded from the container cache: {args.qwen_model}. Rebuild the image with the Qwen "
+                "weights preloaded or provide non-empty input qwen values."
+            ) from exc
         records, generated_queries = maybe_generate_neutrals(
             records=raw_records,
             neutral_field=neutral_field,
@@ -915,6 +938,7 @@ def main() -> None:
         if device == "cuda":
             torch.cuda.empty_cache()
 
+    log_prediction_inputs(records=records, state=state)
     classifier = load_classifier_bundle(model_dir)
     embedding_tokenizer, embedding_model = load_embedding_model(embedding_model_name, device)
     labels = score_records(
